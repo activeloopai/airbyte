@@ -107,11 +107,13 @@ class DestinationDeeplake(Destination):
             if hub.exists(f"{config['path']}/{name}", token=token):
                 ds = hub.load(f"{config['path']}/{name}", token=token)
             else: 
-                ds = hub.empty(f"{config['path']}/{name}", overwrite=overwrite, token=token)     
+                ds = hub.empty(f"{config['path']}/{name}", overwrite=overwrite, token=token)   
+
             with ds:
                 for column_name, definition in schema["schema"]:
                     htype = self.map_types(definition["type"])
-                    ds.create_tensor(column_name, htype=htype, exist_ok=True, verify=False, create_shape_tensor=False, create_sample_info_tensor=False, create_id_tensor=False)
+                    if column_name not in ds.tensors:
+                        ds.create_tensor(column_name, htype=htype, exist_ok=True, create_shape_tensor=False, create_sample_info_tensor=False, create_id_tensor=False)
                     
             streams[name]["ds"] = ds
 
