@@ -99,21 +99,26 @@ class DestinationDeeplake(Destination):
             s.stream.name: {"schema": s.stream.json_schema["properties"].items(), "sync_mode": s.destination_sync_mode}
             for s in configured_catalog.streams
         }
-
+ 
         for name, schema in streams.items():
             print(f"Creating dataset at {config['path']}/{name} in sync={schema['sync_mode']}")
             overwrite = schema["sync_mode"] == DestinationSyncMode.overwrite
             token = config["token"] if "token" in config else None
-            ds = hub.empty(f"{config['path']}/{name}", overwrite=overwrite, token=token)
+            if hub.exists(f"{config['path']}/{name}", token=token):
+                ds = hub.load(f"{config['path']}/{name}", token=token)
+            else: 
+                ds = hub.empty(f"{config['path']}/{name}", overwrite=overwrite, token=token)     
             with ds:
                 for column_name, definition in schema["schema"]:
                     htype = self.map_types(definition["type"])
-                    ds.create_tensor(column_name, htype=htype, exist_ok=True)
+                    ds.create_tensor(column_name, htype=htype, exist_ok=True, verify=False, create_shape_tensor=False, create_sample_info_tensor=False, create_id_tensor=False)
+                    
             streams[name]["ds"] = ds
 
         for message in input_messages:
             if message.type == Type.STATE:
-                ds.commit()
+                print(message.type, message, dir(message))
+                ds.commit(str(message), allow_empty=True)
                 yield message
             elif message.type == Type.RECORD:
                 record = message.record
@@ -123,7 +128,7 @@ class DestinationDeeplake(Destination):
                 # ignore other message types for now
                 continue
 
-        ds.commit()
+        ds.commit(allow_empty=True)
 
     def check(self, logger: AirbyteLogger, config: Mapping[str, Any]) -> AirbyteConnectionStatus:
         """
@@ -139,7 +144,9 @@ class DestinationDeeplake(Destination):
         """
         try:
             token = config["token"] if "token" in config else None
-            ds = hub.empty(config["path"], token=token, overwrite=True)
+            path = f"{config['path']}/_airbyte_test"
+            ds = hub.empty(path, token=token, overwrite=True)
+            ds.delete()
             # TODO add more exhaustive checks for parameters
             return AirbyteConnectionStatus(status=Status.SUCCEEDED)
         except Exception as e:

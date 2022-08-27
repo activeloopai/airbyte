@@ -32,5 +32,6 @@
   "[json]": {
     "editor.formatOnSave": true,
     "editor.defaultFormatter": "esbenp.prettier-vscode"
-  }
+  },
+  "python.formatting.provider": "black"
 }
