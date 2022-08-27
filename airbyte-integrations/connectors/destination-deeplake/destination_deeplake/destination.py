@@ -119,8 +119,7 @@ class DestinationDeeplake(Destination):
 
         for message in input_messages:
             if message.type == Type.STATE:
-                print(message.type, message, dir(message))
-                ds.commit(str(message), allow_empty=True)
+                ds.commit(str(message.type), allow_empty=True)
                 yield message
             elif message.type == Type.RECORD:
                 record = message.record
