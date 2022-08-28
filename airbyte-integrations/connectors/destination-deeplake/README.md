@@ -128,4 +128,5 @@ You've checked out the repo, implemented a million dollar feature, and you're re
 python main.py spec
 python main.py check --config secrets/config.json
 cat integration_tests/messages.jsonl | python main.py write --config secrets/config.json --catalog integration_tests/configured_catalog.json
+docker build . -t airbyte/destination-deeplake:dev
 ```

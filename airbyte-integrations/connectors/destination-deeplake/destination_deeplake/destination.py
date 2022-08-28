@@ -115,11 +115,33 @@ class DestinationDeeplake(Destination):
                             create_sample_info_tensor=False,
                             create_id_tensor=False,
                         )
-            # logger.debug(f"Appended into {name} {len(stream['cache'])} rows")
+                        
+            print(f"Loaded {name} dataset")
             streams[name]["ds"] = ds
             streams[name]["cache"] = []
 
         return streams
+    
+    def flush(self, streams:Iterable[Dict]):
+        """Flushes the cache into datasets
+
+        Args:
+            streams (Iterable[Dict]): _description_
+        """
+        for name, stream in streams.items():
+            length = len(stream['cache'])
+            
+            if length == 0:
+                continue
+            cache = {column_name: [row[column_name] for row in stream["cache"]] for column_name, _ in stream["schema"]}
+            
+            with stream["ds"] as ds:
+                for column_name, column in cache.items():
+                    ds[column_name].extend(column)
+                ds.commit(f"appended {length} rows", allow_empty=True)
+            
+            print(f"Appended into {name} {length} rows")
+            stream["cache"] = []
 
     def write(
         self, config: Mapping[str, Any], configured_catalog: ConfiguredAirbyteCatalog, input_messages: Iterable[AirbyteMessage]
@@ -143,13 +165,7 @@ class DestinationDeeplake(Destination):
 
         for message in input_messages:
             if message.type == Type.STATE:
-                for name, stream in streams.items():
-                    cache = {column_name: [row[column_name] for row in stream["cache"]] for column_name, _ in stream["schema"]}
-                    with stream["ds"] as ds:
-                        ds.extend(cache)
-                        ds.commit(f"appended {len(stream['cache'])} rows", allow_empty=True)
-                    logger.info(msg=f"Appended into {name} {len(stream['cache'])} rows")
-                    stream["cache"] = []
+                self.flush(streams)
                 yield message
 
             elif message.type == Type.RECORD:
@@ -159,8 +175,8 @@ class DestinationDeeplake(Destination):
             else:
                 # ignore other message types for now
                 continue
-
-        ds.commit(allow_empty=True)
+            
+        self.flush(streams)
 
     def check(self, logger: AirbyteLogger, config: Mapping[str, Any]) -> AirbyteConnectionStatus:
         """
