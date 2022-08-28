@@ -4,8 +4,9 @@
 
 
 from sre_constants import ANY
-from typing import Any, Iterable, List, Mapping, Union
+from typing import Any, Dict, Iterable, List, Mapping, Union
 
+from asyncio.log import logger
 from airbyte_cdk import AirbyteLogger
 from airbyte_cdk.destinations import Destination
 from airbyte_cdk.models import AirbyteConnectionStatus, AirbyteMessage, ConfiguredAirbyteCatalog, Status, DestinationSyncMode, Status, Type
@@ -24,7 +25,7 @@ class DestinationDeeplake(Destination):
         "json": hub.htype.JSON,
         "null": hub.htype.TEXT,
         "object": hub.htype.JSON,
-        "boolean": hub.htype.DEFAULT
+        "boolean": hub.htype.DEFAULT,
     }
 
     def map_types(self, dtype: Union[str, List]):
@@ -77,6 +78,49 @@ class DestinationDeeplake(Destination):
             sample[column] = self.denulify(data[column], definition) if column in data else np.array([])
         return sample
 
+    def load_datasets(self, config: Mapping[str, Any], configured_catalog: ConfiguredAirbyteCatalog) -> Iterable[Dict]:
+        """
+        Create or load datasets
+
+        Args:
+            config (Mapping[str, Any]): _description_
+            configured_catalog (ConfiguredAirbyteCatalog): _description_
+
+        Returns:
+            Iterable[Dict]: _description_
+        """
+        streams = {
+            s.stream.name: {"schema": s.stream.json_schema["properties"].items(), "sync_mode": s.destination_sync_mode}
+            for s in configured_catalog.streams
+        }
+
+        for name, schema in streams.items():
+            print(f"Creating dataset at {config['path']}/{name} in sync={schema['sync_mode']}")
+            overwrite = schema["sync_mode"] == DestinationSyncMode.overwrite
+            token = config["token"] if "token" in config else None
+            if hub.exists(f"{config['path']}/{name}", token=token):
+                ds = hub.load(f"{config['path']}/{name}", token=token)
+            else:
+                ds = hub.empty(f"{config['path']}/{name}", overwrite=overwrite, token=token)
+
+            with ds:
+                for column_name, definition in schema["schema"]:
+                    htype = self.map_types(definition["type"])
+                    if column_name not in ds.tensors:
+                        ds.create_tensor(
+                            column_name,
+                            htype=htype,
+                            exist_ok=True,
+                            create_shape_tensor=False,
+                            create_sample_info_tensor=False,
+                            create_id_tensor=False,
+                        )
+            # logger.debug(f"Appended into {name} {len(stream['cache'])} rows")
+            streams[name]["ds"] = ds
+            streams[name]["cache"] = []
+
+        return streams
+
     def write(
         self, config: Mapping[str, Any], configured_catalog: ConfiguredAirbyteCatalog, input_messages: Iterable[AirbyteMessage]
     ) -> Iterable[AirbyteMessage]:
@@ -95,36 +139,23 @@ class DestinationDeeplake(Destination):
         :param input_messages: The stream of input messages received from the source
         :return: Iterable of AirbyteStateMessages wrapped in AirbyteMessage structs
         """
-        streams = {
-            s.stream.name: {"schema": s.stream.json_schema["properties"].items(), "sync_mode": s.destination_sync_mode}
-            for s in configured_catalog.streams
-        }
- 
-        for name, schema in streams.items():
-            print(f"Creating dataset at {config['path']}/{name} in sync={schema['sync_mode']}")
-            overwrite = schema["sync_mode"] == DestinationSyncMode.overwrite
-            token = config["token"] if "token" in config else None
-            if hub.exists(f"{config['path']}/{name}", token=token):
-                ds = hub.load(f"{config['path']}/{name}", token=token)
-            else: 
-                ds = hub.empty(f"{config['path']}/{name}", overwrite=overwrite, token=token)   
-
-            with ds:
-                for column_name, definition in schema["schema"]:
-                    htype = self.map_types(definition["type"])
-                    if column_name not in ds.tensors:
-                        ds.create_tensor(column_name, htype=htype, exist_ok=True, create_shape_tensor=False, create_sample_info_tensor=False, create_id_tensor=False)
-                    
-            streams[name]["ds"] = ds
+        streams = self.load_datasets(config, configured_catalog)
 
         for message in input_messages:
             if message.type == Type.STATE:
-                ds.commit(str(message.type), allow_empty=True)
+                for name, stream in streams.items():
+                    cache = {column_name: [row[column_name] for row in stream["cache"]] for column_name, _ in stream["schema"]}
+                    with stream["ds"] as ds:
+                        ds.extend(cache)
+                        ds.commit(f"appended {len(stream['cache'])} rows", allow_empty=True)
+                    logger.info(msg=f"Appended into {name} {len(stream['cache'])} rows")
+                    stream["cache"] = []
                 yield message
+
             elif message.type == Type.RECORD:
                 record = message.record
                 sample = self.process_row(record.data, streams[record.stream]["schema"])
-                streams[record.stream]["ds"].append(sample)
+                streams[record.stream]["cache"].append(sample)
             else:
                 # ignore other message types for now
                 continue
