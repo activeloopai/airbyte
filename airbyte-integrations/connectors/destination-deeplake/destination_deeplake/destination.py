@@ -99,13 +99,16 @@ class DestinationDeeplake(Destination):
             overwrite = schema["sync_mode"] == DestinationSyncMode.overwrite
             token = config["token"] if "token" in config else None
             if hub.exists(f"{config['path']}/{name}", token=token):
-                ds = hub.load(f"{config['path']}/{name}", token=token)
+                ds = hub.load(f"{config['path']}/{name}", token=token, read_only=False)
             else:
                 ds = hub.empty(f"{config['path']}/{name}", overwrite=overwrite, token=token)
 
             with ds:
                 for column_name, definition in schema["schema"]:
                     htype = self.map_types(definition["type"])
+                    if overwrite and column_name in ds.tensors:
+                        ds.delete_tensor(column_name, large_ok=True)
+                        
                     if column_name not in ds.tensors:
                         ds.create_tensor(
                             column_name,
