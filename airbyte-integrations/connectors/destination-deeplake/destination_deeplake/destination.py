@@ -83,11 +83,11 @@ class DestinationDeeplake(Destination):
         Create or load datasets
 
         Args:
-            config (Mapping[str, Any]): _description_
-            configured_catalog (ConfiguredAirbyteCatalog): _description_
+            config (Mapping[str, Any]): configurations of datasets
+            configured_catalog (ConfiguredAirbyteCatalog): configurations of streams
 
         Returns:
-            Iterable[Dict]: _description_
+            Iterable[Dict]: stream dictionary that contain schema, sync_mode, dataset and cache 
         """
         streams = {
             s.stream.name: {"schema": s.stream.json_schema["properties"].items(), "sync_mode": s.destination_sync_mode}
