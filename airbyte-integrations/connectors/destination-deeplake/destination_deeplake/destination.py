@@ -108,7 +108,7 @@ class DestinationDeeplake(Destination):
                     htype = self.map_types(definition["type"])
                     if overwrite and column_name in ds.tensors:
                         ds.delete_tensor(column_name, large_ok=True)
-                        
+
                     if column_name not in ds.tensors:
                         ds.create_tensor(
                             column_name,
@@ -118,31 +118,32 @@ class DestinationDeeplake(Destination):
                             create_sample_info_tensor=False,
                             create_id_tensor=False,
                         )
-                        
+
             print(f"Loaded {name} dataset")
             streams[name]["ds"] = ds
             streams[name]["cache"] = []
 
         return streams
-    
-    def flush(self, streams:Iterable[Dict]):
-        """Flushes the cache into datasets
+
+    def flush(self, streams: Iterable[Dict]):
+        """
+        Flushes the cache into datasets
 
         Args:
             streams (Iterable[Dict]): _description_
         """
         for name, stream in streams.items():
-            length = len(stream['cache'])
-            
+            length = len(stream["cache"])
+
             if length == 0:
                 continue
             cache = {column_name: [row[column_name] for row in stream["cache"]] for column_name, _ in stream["schema"]}
-            
+
             with stream["ds"] as ds:
                 for column_name, column in cache.items():
                     ds[column_name].extend(column)
                 ds.commit(f"appended {length} rows", allow_empty=True)
-            
+
             print(f"Appended into {name} {length} rows")
             stream["cache"] = []
 
@@ -178,7 +179,7 @@ class DestinationDeeplake(Destination):
             else:
                 # ignore other message types for now
                 continue
-            
+
         self.flush(streams)
 
     def check(self, logger: AirbyteLogger, config: Mapping[str, Any]) -> AirbyteConnectionStatus:
