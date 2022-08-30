@@ -81,13 +81,29 @@ class DestinationDeeplake(Destination):
         sample = {}
         for column, definition in schema:
             if transform is not None and column in tran_sample.keys():
-                sample[column] = self.denulify(tran_sample[column])
+                sample[column] = self.denulify(tran_sample[column], definition)
             elif column in data:
                 sample[column] = self.denulify(data[column], definition)
             else:
                 sample[column] = np.array([])
 
         return sample
+
+    def construct_schema(self, schema: Mapping[str, Any], config: Mapping[str, Any]) -> Iterable[Dict]:
+        new_schema = {}
+        tensor_defs = {}
+        if "overwrite_tensor_definitions" in config:
+            tensor_defs = str(config["overwrite_tensor_definitions"]).replace("'", '"')
+            tensor_defs = json.loads(tensor_defs)
+
+        for column_name, items in schema:
+            if "neglected_tensors" in config and column_name in config["neglected_tensors"]:
+                continue
+            elif column_name in tensor_defs:
+                new_schema[column_name] = {"type": tensor_defs[column_name]["htype"], "kwargs": tensor_defs[column_name]}
+            else: 
+                new_schema[column_name] = items
+        return new_schema.items()
 
     def load_datasets(self, config: Mapping[str, Any], configured_catalog: ConfiguredAirbyteCatalog) -> Iterable[Dict]:
         """
@@ -117,13 +133,8 @@ class DestinationDeeplake(Destination):
 
             self.setup_activeloop_creds(ds, config)
 
-            if "neglected_tensors" in config:
-                for column_name in config["neglected_tensors"]:
-                    schema["schema"].pop(column_name, None)
-
-            if "overwrite_tensor_definitions" in config:
-                for tensor_name, kwargs in config["overwrite_tensor_definitions"].items():
-                    schema["schema"][tensor_name] = {"type": kwargs["htype"], "kwargs": kwargs}
+            # construct schema
+            schema["schema"] = self.construct_schema(schema["schema"], config)
 
             with ds:
                 for column_name, definition in schema["schema"]:
