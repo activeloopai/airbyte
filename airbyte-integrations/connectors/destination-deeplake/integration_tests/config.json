@@ -1,3 +1,7 @@
 {
-  "path": "mem://username"
+  "path": "mem://username",
+  "managed_creds": ["cred_1", "creds_2"],
+  "overwrite_tensor_definitions": "{'images': {'htype': 'link[image]', 'sample_compression': 'jpeg'}}",
+  "neglected_tensors": ["images", "labels"], 
+  "custom_transform": "{\n 'column_name': int(row['column_name'])+1, \n 'images': hub.link('https://localhost:8000?img_id=' + row['image_url'], 'creds')}"
 }

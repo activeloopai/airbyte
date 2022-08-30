@@ -22,9 +22,42 @@
         "title": "Token",
         "type": "string",
         "description": "token provided from app.activeloop.ai",
-        "order": 1,
+        "order": 2,
+        "airbyte_secret": true,
         "examples": ["{API TOKEN}"]
+      },
+      "managed_creds": {
+        "title": "Managed Credentials in Activeloop (optional, advanced)",
+        "type": "array",
+        "description": "Credentials that would be used for accessing remote images",
+        "order": 5,
+        "examples": [["creds_1", "creds_2"]]
+      },
+      "overwrite_tensor_definitions": {
+        "title": "Overwrite tensor definitions (optional)",
+        "type": "string",
+        "description": "If tensor definition written, then it would overwrite upon creation",
+        "order": 4,
+        "multiline": true,
+        "examples": ["{\n'images': \n    { \n        'htype': 'link[images]',\n        'sample_compression': 'jpeg'\n    },\n}"]
+      },
+      "neglected_tensors": {
+        "title": "Neglected Tensors (optional)",
+        "type": "array",
+        "description": "Tensor names specified here will be neglected after transformation happens",
+        "order": 5,
+        "examples": [["column_name_1", "column_name_2"]]
+      },
+      "custom_transform": {
+        "title": "Custom Transformation (optional, advanced)",
+        "type": "string",
+        "multiline": true,
+        "description": "Custom python row-wise transformation as a dictionary. If column name is not specified then it will assume 1:1 mapping. For each tensor added make sure to have definition overwritten.",
+        "order": 6,
+        "examples": ["{\n 'column_name': int(row['column_name'])+1, \n 'images': hub.link('https://localhost:8000?img_id=' + row['image_url'], 'creds')}"]
       }
     }
   }
 }
+
+

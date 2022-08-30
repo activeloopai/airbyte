@@ -13,6 +13,7 @@ from airbyte_cdk.models import AirbyteConnectionStatus, AirbyteMessage, Configur
 
 import numpy as np
 import hub
+import json
 
 
 class DestinationDeeplake(Destination):
@@ -38,6 +39,8 @@ class DestinationDeeplake(Destination):
         Returns:
             str: hub type
         """
+        if str(dtype) in hub.HTYPE_CONFIGURATIONS.keys():
+            return str(dtype)
 
         if isinstance(dtype, list) or isinstance(dtype, dict) or dtype not in self.type_map:
             dtype = "json"
@@ -62,9 +65,9 @@ class DestinationDeeplake(Destination):
             return [self.denulify(x, dtype["items"]) for x in element if x is not None]
         return element
 
-    def process_row(self, data: dict, schema: Mapping[str, Any]):
+    def process_row(self, data: dict, schema: Mapping[str, Any], transform=None) -> Iterable[Dict]:
         """
-        Fill in missing columns and clean up nulls
+        Fill in missing columns, apply transformations upon definition and clean up nulls
 
         Args:
             data (dict): record.data
@@ -73,9 +76,17 @@ class DestinationDeeplake(Destination):
         Returns:
             dict: cleaned sample to append into hub dataset
         """
+        tran_sample = eval(transform, {"row": data, "hub": hub, "np": np}) if not transform is None else {}
+
         sample = {}
         for column, definition in schema:
-            sample[column] = self.denulify(data[column], definition) if column in data else np.array([])
+            if transform is not None and column in tran_sample.keys():
+                sample[column] = self.denulify(tran_sample[column])
+            elif column in data:
+                sample[column] = self.denulify(data[column], definition)
+            else:
+                sample[column] = np.array([])
+
         return sample
 
     def load_datasets(self, config: Mapping[str, Any], configured_catalog: ConfiguredAirbyteCatalog) -> Iterable[Dict]:
@@ -87,7 +98,7 @@ class DestinationDeeplake(Destination):
             configured_catalog (ConfiguredAirbyteCatalog): configurations of streams
 
         Returns:
-            Iterable[Dict]: stream dictionary that contain schema, sync_mode, dataset and cache 
+            Iterable[Dict]: stream dictionary that contain schema, sync_mode, dataset and cache
         """
         streams = {
             s.stream.name: {"schema": s.stream.json_schema["properties"].items(), "sync_mode": s.destination_sync_mode}
@@ -98,26 +109,44 @@ class DestinationDeeplake(Destination):
             print(f"Creating dataset at {config['path']}/{name} in sync={schema['sync_mode']}")
             overwrite = schema["sync_mode"] == DestinationSyncMode.overwrite
             token = config["token"] if "token" in config else None
+
             if hub.exists(f"{config['path']}/{name}", token=token):
                 ds = hub.load(f"{config['path']}/{name}", token=token, read_only=False)
             else:
                 ds = hub.empty(f"{config['path']}/{name}", overwrite=overwrite, token=token)
 
+            self.setup_activeloop_creds(ds, config)
+
+            if "neglected_tensors" in config:
+                for column_name in config["neglected_tensors"]:
+                    schema["schema"].pop(column_name, None)
+
+            if "overwrite_tensor_definitions" in config:
+                for tensor_name, kwargs in config["overwrite_tensor_definitions"].items():
+                    schema["schema"][tensor_name] = {"type": kwargs["htype"], "kwargs": kwargs}
+
             with ds:
                 for column_name, definition in schema["schema"]:
+
                     htype = self.map_types(definition["type"])
                     if overwrite and column_name in ds.tensors:
-                        ds.delete_tensor(column_name, large_ok=True)
-
+                        ds.delete_tensor(column_name, large_ok=True) 
+                    
                     if column_name not in ds.tensors:
-                        ds.create_tensor(
-                            column_name,
-                            htype=htype,
-                            exist_ok=True,
-                            create_shape_tensor=False,
-                            create_sample_info_tensor=False,
-                            create_id_tensor=False,
-                        )
+                        if "kwargs" in definition:
+                            kwargs = definition["kwargs"]
+                            ds.create_tensor(column_name, **kwargs)
+                            logger.info(f"Created tensor {column_name} with overwritten arguments {kwargs}")
+                        else:
+                            ds.create_tensor(
+                                column_name,
+                                htype=htype,
+                                exist_ok=True,
+                                create_shape_tensor=False,
+                                create_sample_info_tensor=False,
+                                create_id_tensor=False,
+                            )
+                            logger.info(f"Created tensor {column_name} with htype {htype}")
 
             print(f"Loaded {name} dataset")
             streams[name]["ds"] = ds
@@ -167,6 +196,8 @@ class DestinationDeeplake(Destination):
         """
         streams = self.load_datasets(config, configured_catalog)
 
+        transform = compile(config["custom_transform"], "", "eval") if "custom_transform" in config else None
+
         for message in input_messages:
             if message.type == Type.STATE:
                 self.flush(streams)
@@ -174,13 +205,20 @@ class DestinationDeeplake(Destination):
 
             elif message.type == Type.RECORD:
                 record = message.record
-                sample = self.process_row(record.data, streams[record.stream]["schema"])
+                sample = self.process_row(record.data, streams[record.stream]["schema"], transform)
                 streams[record.stream]["cache"].append(sample)
             else:
                 # ignore other message types for now
                 continue
 
         self.flush(streams)
+
+    def setup_activeloop_creds(self, ds: hub.Dataset, config: Mapping[str, Any], managed=False):
+        if "managed_creds" in config:
+            existing_keys = ds.get_creds_keys()
+            for creds_name in config["managed_creds"]:
+                if creds_name not in existing_keys:
+                    ds.add_creds_key(creds_name, managed=managed)
 
     def check(self, logger: AirbyteLogger, config: Mapping[str, Any]) -> AirbyteConnectionStatus:
         """
@@ -198,7 +236,26 @@ class DestinationDeeplake(Destination):
             token = config["token"] if "token" in config else None
             path = f"{config['path']}/_airbyte_test"
             ds = hub.empty(path, token=token, overwrite=True)
+
+            self.setup_activeloop_creds(ds, config)
+
+            if "overwrite_tensor_definitions" in config:
+                tensor_defs = str(config["overwrite_tensor_definitions"]).replace("'", '"')
+                tensor_defs = json.loads(tensor_defs)
+                for tensor_name, kwargs in tensor_defs.items():
+                    ds.create_tensor(tensor_name, **kwargs)
+                    logger.info(msg=f"Tensor named '{tensor_name}' with args {kwargs} will be updated")
+
+            if "neglected_tensors" in config:
+                for tensor_name in config["neglected_tensors"]:
+                    logger.info(msg=f"Tensor named '{tensor_name}' will be neglected")
+
+            if "custom_transform" in config:
+                # parse python code here
+                compile(config["custom_transform"], "", "eval")
+                logger.info("successfully compiled the transformation")
             ds.delete()
+
             # TODO add more exhaustive checks for parameters
             return AirbyteConnectionStatus(status=Status.SUCCEEDED)
         except Exception as e:
