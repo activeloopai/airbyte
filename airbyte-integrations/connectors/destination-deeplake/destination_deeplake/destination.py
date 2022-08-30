@@ -90,19 +90,28 @@ class DestinationDeeplake(Destination):
         return sample
 
     def construct_schema(self, schema: Mapping[str, Any], config: Mapping[str, Any]) -> Iterable[Dict]:
-        new_schema = {}
-        tensor_defs = {}
-        if "overwrite_tensor_definitions" in config:
-            tensor_defs = str(config["overwrite_tensor_definitions"]).replace("'", '"')
-            tensor_defs = json.loads(tensor_defs)
+        """
+        Construct schame from existing schema and provided configurations including overwrite_tensor_definitions and neglected_tensors
 
+        Args:
+            schema (Mapping[str, Any]): structure of the data
+            config (Mapping[str, Any]): configs
+
+        Returns:
+            dict: restructured schema
+        """
+        new_schema = {}
         for column_name, items in schema:
             if "neglected_tensors" in config and column_name in config["neglected_tensors"]:
                 continue
-            elif column_name in tensor_defs:
+            new_schema[column_name] = items
+
+        if "overwrite_tensor_definitions" in config:
+            tensor_defs = str(config["overwrite_tensor_definitions"]).replace("'", '"')
+            tensor_defs = json.loads(tensor_defs)
+            for column_name, value in tensor_defs.items():
                 new_schema[column_name] = {"type": tensor_defs[column_name]["htype"], "kwargs": tensor_defs[column_name]}
-            else: 
-                new_schema[column_name] = items
+
         return new_schema.items()
 
     def load_datasets(self, config: Mapping[str, Any], configured_catalog: ConfiguredAirbyteCatalog) -> Iterable[Dict]:

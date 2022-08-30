@@ -114,7 +114,6 @@ def test_write(
     ds = hub.load(f'{config.get("path")}/{test_table_name}')
 
     column1 = ds["column1"].numpy()
-   
     assert len(ds) == 2
     assert column1[0] == airbyte_message1.record.data["column1"]
     assert column1[1] == airbyte_message2.record.data["column1"]
